@@ -3,15 +3,15 @@ name: Build and Release FileCrypt
 on:
   push:
     tags:
-      - "v*" # Triggers on semantic version tags (v1.0.0, v2.3.4, etc.)
+      - "v*"
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings" # Treat warnings as errors
+  RUSTFLAGS: "-D warnings -C target-feature=+crt-static"
 
 jobs:
   build:
-    name: Build for ${{ matrix.target }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -20,23 +20,28 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: filecrypt-linux-x86_64
             binary_name: filecrypt
+            strip: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: filecrypt-windows-x86_64
             binary_name: filecrypt.exe
+            strip: false
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: filecrypt-macos-x86_64
             binary_name: filecrypt
+            strip: true
+            create_dmg: true
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: filecrypt-macos-arm64
             binary_name: filecrypt
+            strip: true
+            create_dmg: true
 
     steps:
       - uses: actions/checkout@v4
 
-      # Cache cargo dependencies to speed up builds
       - uses: actions/cache@v3
         with:
           path: |
@@ -53,41 +58,52 @@ jobs:
           profile: minimal
           override: true
 
-      - name: Build Release
+      - name: Build
         run: cargo build --release --target ${{ matrix.target }}
-        env:
-          RUSTFLAGS: "-C target-feature=+crt-static" # Static linking where possible
 
-      # Strip debug symbols to reduce binary size (Linux/macOS)
       - name: Strip Binary (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          strip "target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+        if: matrix.strip
+        run: strip "target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
 
-      # On Windows, use a different method to reduce size
-      - name: Reduce Windows Binary Size
-        if: runner.os == 'Windows'
+      - name: Create macOS DMG
+        if: matrix.create_dmg
         run: |
-          cargo install cargo-strip --root ./temp
-          ./temp/bin/cargo-strip --target ${{ matrix.target }}
+          mkdir -p dmg_root/FileCrypt
+          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dmg_root/FileCrypt/
+          create-dmg \
+            --volname "FileCrypt" \
+            --volicon "assets/icon.icns" \
+            --background "assets/dmg_background.png" \
+            --window-pos 200 120 \
+            --window-size 500 300 \
+            --icon-size 100 \
+            --icon "FileCrypt" 100 100 \
+            --hide-extension "FileCrypt" \
+            --app-drop-link 350 100 \
+            "release/FileCrypt-${{ matrix.target }}.dmg" \
+            "dmg_root/"
+        env:
+          PATH: ${{ github.workspace }}/create-dmg:$PATH
 
-      # Create SHA256 checksums
-      - name: Generate Checksum
+      - name: Generate Checksums
         run: |
-          cd "target/${{ matrix.target }}/release/"
-          shasum -a 256 "${{ matrix.binary_name }}" > "${{ matrix.binary_name }}.sha256"
+          cd target/${{ matrix.target }}/release/
+          shasum -a 256 ${{ matrix.binary_name }} > ${{ matrix.binary_name }}.sha256
+          [ -f "../../release/FileCrypt-${{ matrix.target }}.dmg" ] && shasum -a 256 "../../release/FileCrypt-${{ matrix.target }}.dmg" > "../../release/FileCrypt-${{ matrix.target }}.dmg.sha256" || true
 
-      - name: Upload Artifact
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: |
             target/${{ matrix.target }}/release/${{ matrix.binary_name }}
             target/${{ matrix.target }}/release/${{ matrix.binary_name }}.sha256
-          retention-days: 3
+            ${{ matrix.create_dmg && format('release/FileCrypt-{}.dmg', matrix.target) || '' }}
+            ${{ matrix.create_dmg && format('release/FileCrypt-{}.dmg.sha256', matrix.target) || '' }}
+          retention-days: 7
 
   release:
-    name: Create GitHub Release
+    name: Create Release
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -98,22 +114,38 @@ jobs:
         with:
           path: artifacts
 
-      # Prepare release assets with proper naming
       - name: Prepare Release Assets
         run: |
           mkdir release_assets
+
           # Linux
-          cp artifacts/filecrypt-linux-x86_64/filecrypt release_assets/filecrypt-x86_64-linux
-          cp artifacts/filecrypt-linux-x86_64/filecrypt.sha256 release_assets/filecrypt-x86_64-linux.sha256
+          cp artifacts/filecrypt-linux-x86_64/filecrypt release_assets/
+          cp artifacts/filecrypt-linux-x86_64/filecrypt.sha256 release_assets/
+
           # Windows
-          cp artifacts/filecrypt-windows-x86_64/filecrypt.exe release_assets/filecrypt-x86_64-windows.exe
-          cp artifacts/filecrypt-windows-x86_64/filecrypt.exe.sha256 release_assets/filecrypt-x86_64-windows.exe.sha256
-          # macOS Intel
+          cp artifacts/filecrypt-windows-x86_64/filecrypt.exe release_assets/
+          cp artifacts/filecrypt-windows-x86_64/filecrypt.exe.sha256 release_assets/
+
+          # macOS
           cp artifacts/filecrypt-macos-x86_64/filecrypt release_assets/filecrypt-x86_64-macos
           cp artifacts/filecrypt-macos-x86_64/filecrypt.sha256 release_assets/filecrypt-x86_64-macos.sha256
-          # macOS ARM
+          cp artifacts/filecrypt-macos-x86_64/FileCrypt-x86_64-apple-darwin.dmg* release_assets/ 2>/dev/null || true
+
           cp artifacts/filecrypt-macos-arm64/filecrypt release_assets/filecrypt-arm64-macos
           cp artifacts/filecrypt-macos-arm64/filecrypt.sha256 release_assets/filecrypt-arm64-macos.sha256
+          cp artifacts/filecrypt-macos-arm64/FileCrypt-aarch64-apple-darwin.dmg* release_assets/ 2>/dev/null || true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_assets/filecrypt
+            release_assets/filecrypt.exe
+            release_assets/filecrypt-x86_64-macos
+            release_assets/filecrypt-arm64-macos
+            release_assets/FileCrypt-*.dmg
+            release_assets/*.sha256
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }} # Mark as prerelease if tag contains hyphen (v1.0.0-rc1)
 
       # Automatically generate release notes from tag message
       - name: Create Release
