@@ -98,7 +98,7 @@ All file formats are supported
 ### Encryption Format
 
 ```plaintext
-[HEADER] (53 bytes)
+[HEADER] (37 bytes)
   - Magic: "FILECRYPT" (8B)
   - Version: 0x01 (1B)
   - Salt: 16B (Argon2id)
