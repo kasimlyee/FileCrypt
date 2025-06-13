@@ -1,4 +1,4 @@
-````markdown
+
 # FileCrypt - Secure File Encryption Tool
 
 ![FileCrypt Logo](https://via.placeholder.com/150) _(Optional: Add a logo if available)_
@@ -19,7 +19,7 @@ A secure, high-performance file encryption tool built in Rust. FileCrypt provide
 ```bash
 cargo install filecrypt
 ```
-````
+
 
 ## Usage
 
