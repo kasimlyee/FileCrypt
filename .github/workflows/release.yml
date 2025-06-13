@@ -3,64 +3,125 @@ name: Build and Release FileCrypt
 on:
   push:
     tags:
-      - "v*"
+      - "v*" # Triggers on semantic version tags (v1.0.0, v2.3.4, etc.)
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings" # Treat warnings as errors
 
 jobs:
   build:
-    name: Build for ${{ matrix.os }}
+    name: Build for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: filecrypt-linux-x86_64
+            artifact_name: filecrypt-linux-x86_64
+            binary_name: filecrypt
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: filecrypt-windows-x86_64.exe
+            artifact_name: filecrypt-windows-x86_64
+            binary_name: filecrypt.exe
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: filecrypt-macos-x86_64
+            artifact_name: filecrypt-macos-x86_64
+            binary_name: filecrypt
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: filecrypt-macos-arm64
+            artifact_name: filecrypt-macos-arm64
+            binary_name: filecrypt
 
     steps:
-      - uses: actions/checkout@v3
-      - name: Set up Rust
+      - uses: actions/checkout@v4
+
+      # Cache cargo dependencies to speed up builds
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           target: ${{ matrix.target }}
+          profile: minimal
           override: true
-      - name: Build
+
+      - name: Build Release
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Upload artifact
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static" # Static linking where possible
+
+      # Strip debug symbols to reduce binary size (Linux/macOS)
+      - name: Strip Binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          strip "target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+
+      # On Windows, use a different method to reduce size
+      - name: Reduce Windows Binary Size
+        if: runner.os == 'Windows'
+        run: |
+          cargo install cargo-strip --root ./temp
+          ./temp/bin/cargo-strip --target ${{ matrix.target }}
+
+      # Create SHA256 checksums
+      - name: Generate Checksum
+        run: |
+          cd "target/${{ matrix.target }}/release/"
+          shasum -a 256 "${{ matrix.binary_name }}" > "${{ matrix.binary_name }}.sha256"
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: target/${{ matrix.target }}/release/${{ matrix.artifact }}
+          name: ${{ matrix.artifact_name }}
+          path: |
+            target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+            target/${{ matrix.target }}/release/${{ matrix.binary_name }}.sha256
+          retention-days: 3
 
   release:
-    name: Create Release
-    runs-on: ubuntu-latest
+    name: Create GitHub Release
     needs: build
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download artifacts
+
+      - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      # Prepare release assets with proper naming
+      - name: Prepare Release Assets
+        run: |
+          mkdir release_assets
+          # Linux
+          cp artifacts/filecrypt-linux-x86_64/filecrypt release_assets/filecrypt-x86_64-linux
+          cp artifacts/filecrypt-linux-x86_64/filecrypt.sha256 release_assets/filecrypt-x86_64-linux.sha256
+          # Windows
+          cp artifacts/filecrypt-windows-x86_64/filecrypt.exe release_assets/filecrypt-x86_64-windows.exe
+          cp artifacts/filecrypt-windows-x86_64/filecrypt.exe.sha256 release_assets/filecrypt-x86_64-windows.exe.sha256
+          # macOS Intel
+          cp artifacts/filecrypt-macos-x86_64/filecrypt release_assets/filecrypt-x86_64-macos
+          cp artifacts/filecrypt-macos-x86_64/filecrypt.sha256 release_assets/filecrypt-x86_64-macos.sha256
+          # macOS ARM
+          cp artifacts/filecrypt-macos-arm64/filecrypt release_assets/filecrypt-arm64-macos
+          cp artifacts/filecrypt-macos-arm64/filecrypt.sha256 release_assets/filecrypt-arm64-macos.sha256
+
+      # Automatically generate release notes from tag message
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/filecrypt-linux-x86_64/filecrypt-linux-x86_64
-            artifacts/filecrypt-windows-x86_64.exe/filecrypt-windows-x86_64.exe
-            artifacts/filecrypt-macos-x86_64/filecrypt-macos-x86_64
-            artifacts/filecrypt-macos-arm64/filecrypt-macos-arm64
+          files: release_assets/*
+          generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref, 'rc') || contains(github.ref, 'beta') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
