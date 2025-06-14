@@ -1,9 +1,7 @@
 
 # FileCrypt - Secure File Encryption Tool
 
-![FileCrypt Logo](https://via.placeholder.com/150) _(Optional: Add a logo if available)_
-
-A secure, high-performance file encryption tool built in Rust. FileCrypt provides military-grade encryption with a user-friendly CLI interface.
+FileCrypt is a secure, high-performance file encryption tool built in Rust. FileCrypt provides military-grade encryption with a user-friendly CLI interface.
 
 ## Features
 
@@ -137,7 +135,7 @@ FileCrypt has been tested against:
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome! 
 
 ## License
 
