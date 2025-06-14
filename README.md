@@ -17,7 +17,7 @@ A secure, high-performance file encryption tool built in Rust. FileCrypt provide
 ## Installation
 
 ```bash
-cargo install filecrypt
+cargo install lyee-filecrypt
 ```
 
 
